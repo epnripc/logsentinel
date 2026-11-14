@@ -9,6 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, func, select
 
 from app.db import Alert, Blocked, Log, LogIn, get_session, init_db
+from app.rules import bruteforce, flood, scan
+
+RULES = [bruteforce.check, flood.check, scan.check]
+SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 
 
 @asynccontextmanager
@@ -32,9 +36,19 @@ def ingest(data: LogIn, db: Session = Depends(get_session)):
     db.add(log)
     db.commit()
     db.refresh(log)
+    for rule in RULES:
+        rule(log, db)
+    db.commit()
     return {"accepted": True, "id": log.id}
 
 
 @app.get("/logs")
 def logs(db: Session = Depends(get_session)):
     return db.exec(select(Log).order_by(Log.id.desc()).limit(20)).all()
+
+
+@app.get("/alerts")
+def alerts(db: Session = Depends(get_session)):
+    items = list(db.exec(select(Alert)).all())
+    items.sort(key=lambda a: (a.status != "open", SEVERITY_ORDER.get(a.severity, 3), -a.last_seen.timestamp()))
+    return items
